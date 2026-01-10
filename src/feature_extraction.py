@@ -3,9 +3,57 @@ import numpy as np
 from PIL import Image
 import pickle
 from sklearn.model_selection import train_test_split
+import cv2
+
+# Try importing MediaPipe (handles both old and new API)
+try:
+    import mediapipe as mp
+    
+    # Force use of old API (simpler, no model file needed)
+    try:
+        mp_hands = mp.solutions.hands
+        hands = mp_hands.Hands(
+            static_image_mode=True,
+            max_num_hands=1,
+            min_detection_confidence=0.5
+        )
+        MEDIAPIPE_API = 'old'
+        MEDIAPIPE_AVAILABLE = True
+        print("MediaPipe loaded successfully!")
+    except AttributeError:
+        # If old API not available, try new API
+        from mediapipe.tasks import python
+        from mediapipe.tasks.python import vision
+        
+        # Download model if not exists
+        model_path = 'hand_landmarker.task'
+        if not os.path.exists(model_path):
+            print("Downloading hand landmark model...")
+            import urllib.request
+            url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+            urllib.request.urlretrieve(url, model_path)
+            print("Model downloaded!")
+        
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            num_hands=1,
+            min_hand_detection_confidence=0.5
+        )
+        hands = vision.HandLandmarker.create_from_options(options)
+        MEDIAPIPE_API = 'new'
+        MEDIAPIPE_AVAILABLE = True
+        print("MediaPipe loaded successfully (NEW API)!")
+        
+except (ImportError, AttributeError) as e:
+    print(f"Warning: MediaPipe not available - {e}")
+    print("Please install MediaPipe: pip install mediapipe")
+    MEDIAPIPE_AVAILABLE = False
+    MEDIAPIPE_API = None
+    hands = None
 
 # Paths
-DATA_DIR = "data"
+DATA_DIR = "data/training"  # Changed to use training folder
 FEATURES_DIR = "features"
 
 # Create features directory
@@ -26,174 +74,177 @@ def load_images_from_folder(folder_path):
                 img = Image.open(img_path)
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                images.append(np.array(img))
+                images.append((np.array(img), filename))
             except Exception as e:
                 print(f"Error loading {filename}: {e}")
     
     return images
 
-def resize_image(image, target_size=(100, 100)):
-    """Resize image to target size using PIL"""
-    img_pil = Image.fromarray(image)
-    img_resized = img_pil.resize(target_size, Image.BILINEAR)
-    return np.array(img_resized)
-
-def extract_color_features(image):
+def extract_hand_landmarks(image):
     """
-    Extract color-based features
-    - Mean, std, min, max for each RGB channel
-    - Color histograms
+    Extract 21 hand landmarks using MediaPipe
+    Returns normalized (x, y, z) coordinates for each landmark
+    Works with both old and new MediaPipe API
     """
-    features = []
-    
-    # Separate RGB channels
-    r_channel = image[:, :, 0]
-    g_channel = image[:, :, 1]
-    b_channel = image[:, :, 2]
-    
-    # Statistical features for each channel
-    for channel in [r_channel, g_channel, b_channel]:
-        features.append(np.mean(channel))
-        features.append(np.std(channel))
-        features.append(np.min(channel))
-        features.append(np.max(channel))
-        features.append(np.median(channel))
-    
-    # Color histograms (16 bins per channel)
-    for channel in [r_channel, g_channel, b_channel]:
-        hist, _ = np.histogram(channel.flatten(), bins=16, range=(0, 256))
-        hist = hist / (hist.sum() + 1e-7)  # Normalize
-        features.extend(hist)
-    
-    return np.array(features)
-
-def extract_edge_features(image):
-    """
-    Extract simple edge features using gradients
-    """
-    features = []
-    
-    # Convert to grayscale
-    gray = np.mean(image, axis=2)
-    
-    # Compute horizontal and vertical gradients (simple difference)
-    grad_x = np.abs(np.diff(gray, axis=1))
-    grad_y = np.abs(np.diff(gray, axis=0))
-    
-    # Edge statistics
-    features.append(np.mean(grad_x))
-    features.append(np.std(grad_x))
-    features.append(np.max(grad_x))
-    
-    features.append(np.mean(grad_y))
-    features.append(np.std(grad_y))
-    features.append(np.max(grad_y))
-    
-    # Edge density (pixels with high gradient)
-    threshold = 30
-    edge_pixels_x = np.sum(grad_x > threshold)
-    edge_pixels_y = np.sum(grad_y > threshold)
-    features.append(edge_pixels_x / grad_x.size)
-    features.append(edge_pixels_y / grad_y.size)
-    
-    return np.array(features)
-
-def extract_texture_features(image):
-    """
-    Extract simple texture features
-    """
-    features = []
-    
-    # Convert to grayscale
-    gray = np.mean(image, axis=2)
-    
-    # Compute local variance (texture measure)
-    # Using 5x5 patches
-    h, w = gray.shape
-    patch_size = 5
-    variances = []
-    
-    for i in range(0, h - patch_size, patch_size):
-        for j in range(0, w - patch_size, patch_size):
-            patch = gray[i:i+patch_size, j:j+patch_size]
-            variances.append(np.var(patch))
-    
-    features.append(np.mean(variances))
-    features.append(np.std(variances))
-    features.append(np.max(variances))
-    features.append(np.min(variances))
-    
-    # Image entropy (measure of randomness)
-    hist, _ = np.histogram(gray.flatten(), bins=256, range=(0, 256))
-    hist = hist / (hist.sum() + 1e-7)
-    entropy = -np.sum(hist * np.log2(hist + 1e-7))
-    features.append(entropy)
-    
-    return np.array(features)
-
-def extract_shape_features(image):
-    """
-    Improved shape features:
-    - fill ratio
-    - number of connected components
-    - largest component aspect ratio
-    - edge density
-    """
-    from scipy import ndimage
-
-    features = []
-
-    gray = np.mean(image, axis=2)
-
-    # adaptive threshold
-    threshold = np.mean(gray)
-    binary = (gray > threshold).astype(np.uint8)
-
-    # --- 1) fill ratio ---
-    fill_ratio = np.sum(binary) / binary.size
-    features.append(fill_ratio)
-
-    # --- 2) connected components ---
-    labeled, num_components = ndimage.label(binary)
-    features.append(num_components / 10.0)  # normalize
-
-    # --- 3) largest component aspect ratio ---
-    if num_components > 0:
-        sizes = ndimage.sum(binary, labeled, range(1, num_components+1))
-        largest = np.argmax(sizes) + 1
-        coords = np.column_stack(np.where(labeled == largest))
-        y_min, x_min = coords.min(axis=0)
-        y_max, x_max = coords.max(axis=0)
-        h = max(1, y_max - y_min)
-        w = max(1, x_max - x_min)
-        aspect_ratio = w / h
+    # Convert to RGB if needed (MediaPipe expects RGB)
+    if len(image.shape) == 2:  # Grayscale
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    elif image.shape[2] == 4:  # RGBA
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
     else:
-        aspect_ratio = 1.0
+        image_rgb = image
+    
+    if MEDIAPIPE_API == 'new':
+        # New API (MediaPipe 0.10.30+)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        detection_result = hands.detect(mp_image)
+        
+        if detection_result.hand_landmarks:
+            hand_landmarks = detection_result.hand_landmarks[0]
+            landmarks = []
+            for landmark in hand_landmarks:
+                landmarks.extend([landmark.x, landmark.y, landmark.z])
+            return np.array(landmarks), hand_landmarks
+    else:
+        # Old API (MediaPipe < 0.10.30)
+        results = hands.process(image_rgb)
+        
+        if results.multi_hand_landmarks:
+            hand_landmarks = results.multi_hand_landmarks[0]
+            landmarks = []
+            for landmark in hand_landmarks.landmark:
+                landmarks.extend([landmark.x, landmark.y, landmark.z])
+            return np.array(landmarks), hand_landmarks
+    
+    return None, None
 
-    features.append(aspect_ratio)
-
-    # --- 4) edge density (strong separator scissors vs rock) ---
-    grad = np.hypot(np.diff(gray, axis=0, prepend=0), np.diff(gray, axis=1, prepend=0))
-    edge_density = np.sum(grad > 25) / grad.size
-    features.append(edge_density)
-
+def calculate_relative_distances(hand_landmarks):
+    """
+    Calculate relative distances between key landmarks
+    Works with both old and new MediaPipe API
+    
+    Landmark indices:
+    0: Wrist
+    4: Thumb tip
+    8: Index finger tip
+    12: Middle finger tip
+    16: Ring finger tip
+    20: Pinky tip
+    """
+    if hand_landmarks is None:
+        return np.zeros(15)  # Return zeros if no hand detected
+    
+    # Extract landmark coordinates (works for both list and object)
+    def get_coords(idx):
+        if MEDIAPIPE_API == 'new':
+            # New API: landmarks is a list
+            lm = hand_landmarks[idx]
+            return np.array([lm.x, lm.y, lm.z])
+        else:
+            # Old API: landmarks.landmark is the list
+            lm = hand_landmarks.landmark[idx]
+            return np.array([lm.x, lm.y, lm.z])
+    
+    def euclidean_distance(p1, p2):
+        return np.linalg.norm(p1 - p2)
+    
+    features = []
+    
+    # Key landmark indices
+    wrist = get_coords(0)
+    thumb_tip = get_coords(4)
+    index_tip = get_coords(8)
+    middle_tip = get_coords(12)
+    ring_tip = get_coords(16)
+    pinky_tip = get_coords(20)
+    
+    # Distance from each fingertip to wrist
+    features.append(euclidean_distance(thumb_tip, wrist))
+    features.append(euclidean_distance(index_tip, wrist))
+    features.append(euclidean_distance(middle_tip, wrist))
+    features.append(euclidean_distance(ring_tip, wrist))
+    features.append(euclidean_distance(pinky_tip, wrist))
+    
+    # Distance between fingertips (especially useful for scissors)
+    features.append(euclidean_distance(thumb_tip, index_tip))
+    features.append(euclidean_distance(index_tip, middle_tip))  # Key for scissors
+    features.append(euclidean_distance(middle_tip, ring_tip))
+    features.append(euclidean_distance(ring_tip, pinky_tip))
+    features.append(euclidean_distance(thumb_tip, pinky_tip))
+    
+    # Distance from fingertips to palm center (landmark 0, 5, 9, 13, 17 avg)
+    palm_center = (get_coords(0) + get_coords(5) + get_coords(9) + 
+                   get_coords(13) + get_coords(17)) / 5
+    
+    features.append(euclidean_distance(thumb_tip, palm_center))
+    features.append(euclidean_distance(index_tip, palm_center))
+    features.append(euclidean_distance(middle_tip, palm_center))
+    features.append(euclidean_distance(ring_tip, palm_center))
+    features.append(euclidean_distance(pinky_tip, palm_center))
+    
     return np.array(features)
+
+def calculate_finger_angles(hand_landmarks):
+    """
+    Calculate angles of fingers relative to palm
+    Useful for detecting extended vs folded fingers
+    Works with both old and new MediaPipe API
+    """
+    if hand_landmarks is None:
+        return np.zeros(5)
+    
+    def get_coords(idx):
+        if MEDIAPIPE_API == 'new':
+            lm = hand_landmarks[idx]
+            return np.array([lm.x, lm.y, lm.z])
+        else:
+            lm = hand_landmarks.landmark[idx]
+            return np.array([lm.x, lm.y, lm.z])
+    
+    def calculate_angle(p1, p2, p3):
+        """Calculate angle at p2 formed by p1-p2-p3"""
+        v1 = p1 - p2
+        v2 = p3 - p2
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-7)
+        angle = np.arccos(np.clip(cos_angle, -1.0, 1.0))
+        return angle
+    
+    angles = []
+    
+    # Finger base, middle, tip indices
+    fingers = [
+        (1, 2, 4),   # Thumb
+        (5, 6, 8),   # Index
+        (9, 10, 12), # Middle
+        (13, 14, 16),# Ring
+        (17, 18, 20) # Pinky
+    ]
+    
+    for base, mid, tip in fingers:
+        angle = calculate_angle(get_coords(base), get_coords(mid), get_coords(tip))
+        angles.append(angle)
+    
+    return np.array(angles)
 
 def extract_all_features(image):
     """
-    Extract all features from an image
+    Extract all hand-based features from an image
     """
-    # Resize image for consistency
-    image_resized = resize_image(image, target_size=(100, 100))
+    # Extract hand landmarks
+    landmarks_flat, hand_landmarks = extract_hand_landmarks(image)
     
-    # Extract different feature types
-    color_feat = extract_color_features(image_resized)
-    edge_feat = extract_edge_features(image_resized)
-    texture_feat = extract_texture_features(image_resized)
-    shape_feat = extract_shape_features(image_resized)
+    if landmarks_flat is None:
+        # Return zeros if no hand detected
+        return None
+    
+    # Calculate relative distances
+    distances = calculate_relative_distances(hand_landmarks)
+    
+    # Calculate finger angles
+    angles = calculate_finger_angles(hand_landmarks)
     
     # Combine all features
-    all_features = np.concatenate([color_feat, edge_feat, texture_feat, shape_feat])
+    all_features = np.concatenate([landmarks_flat, distances, angles])
     
     return all_features
 
@@ -202,11 +253,13 @@ def extract_features_from_dataset():
     Extract features from all images in the dataset
     """
     print("="*70)
-    print("FEATURE EXTRACTION - PURE MACHINE LEARNING")
+    print("HAND LANDMARK FEATURE EXTRACTION - MediaPipe")
     print("="*70)
+    print(f"Reading from: {DATA_DIR}")
     
     X = []  # Features
     y = []  # Labels
+    failed_images = []
     
     classes = ['rock', 'paper', 'scissors']
     
@@ -221,16 +274,34 @@ def extract_features_from_dataset():
         images = load_images_from_folder(class_path)
         print(f"  Found {len(images)} images")
         
-        for idx, image in enumerate(images):
+        if len(images) == 0:
+            print(f"  ERROR: No images found in {class_path}")
+            continue
+        
+        processed = 0
+        for idx, (image, filename) in enumerate(images):
             if idx % 50 == 0 and idx > 0:
                 print(f"  Processed {idx}/{len(images)} images")
             
             try:
                 features = extract_all_features(image)
-                X.append(features)
-                y.append(CLASS_MAP[class_name])
+                if features is not None:
+                    X.append(features)
+                    y.append(CLASS_MAP[class_name])
+                    processed += 1
+                else:
+                    failed_images.append((class_name, filename))
             except Exception as e:
-                print(f"  Error processing image {idx}: {e}")
+                print(f"  Error processing image {idx} ({filename}): {e}")
+                failed_images.append((class_name, filename))
+        
+        print(f"  Successfully processed: {processed}/{len(images)} images")
+    
+    if len(X) == 0:
+        print(f"\n" + "="*70)
+        print("ERROR: No features extracted!")
+        print("="*70)
+        return np.array([]), np.array([])
     
     X = np.array(X)
     y = np.array(y)
@@ -241,13 +312,18 @@ def extract_features_from_dataset():
     print(f"Total samples: {len(X)}")
     print(f"Feature dimensions: {X.shape[1]}")
     print(f"Classes: {np.unique(y)}")
+    print(f"Failed to detect hands: {len(failed_images)}")
+    
+    if failed_images and len(failed_images) < 20:
+        print(f"\nFailed images:")
+        for class_name, filename in failed_images[:10]:
+            print(f"  {class_name}/{filename}")
     
     # Feature breakdown
     print(f"\nFeature composition:")
-    print(f"  Color features: 63 (RGB stats + histograms)")
-    print(f"  Edge features: 8 (gradient statistics)")
-    print(f"  Texture features: 5 (variance + entropy)")
-    print(f"  Shape features: 5 (fill ratio + moments)")
+    print(f"  Hand landmarks (21 × 3): 63 features (x, y, z coordinates)")
+    print(f"  Relative distances: 15 features (fingertip distances)")
+    print(f"  Finger angles: 5 features (finger bend angles)")
     print(f"  Total: {X.shape[1]} features")
     
     return X, y
@@ -266,6 +342,12 @@ def split_and_save_data(X, y, test_size=0.2, random_state=42):
     
     print(f"Training samples: {len(X_train)}")
     print(f"Testing samples: {len(X_test)}")
+    
+    # Print class distribution
+    for class_name, class_id in CLASS_MAP.items():
+        train_count = np.sum(y_train == class_id)
+        test_count = np.sum(y_test == class_id)
+        print(f"  {class_name}: {train_count} train, {test_count} test")
     
     # Save features
     train_data = {
@@ -292,16 +374,43 @@ def split_and_save_data(X, y, test_size=0.2, random_state=42):
 
 def main():
     """Main function"""
+    # Check MediaPipe availability
+    if not MEDIAPIPE_AVAILABLE:
+        print("\n" + "="*70)
+        print("ERROR: MediaPipe is not properly installed!")
+        print("="*70)
+        print("\nPlease install MediaPipe using ONE of these commands:")
+        print("\nOption 1 (Recommended - latest stable):")
+        print("  pip install mediapipe")
+        print("\nOption 2 (Specific working version):")
+        print("  pip install mediapipe==0.10.14")
+        print("\nOption 3 (If using conda):")
+        print("  conda install -c conda-forge mediapipe")
+        print("\nAfter installation, run this script again.")
+        print("="*70)
+        return
+    
     # Check if data exists
     if not os.path.exists(DATA_DIR):
-        print(f"Error: Data directory '{DATA_DIR}' not found!")
+        print(f"\nError: Data directory '{DATA_DIR}' not found!")
+        print(f"Expected structure:")
+        print(f"  data/")
+        print(f"  ├── training/")
+        print(f"  │   ├── rock/")
+        print(f"  │   ├── paper/")
+        print(f"  │   └── scissors/")
+        print(f"  └── testing/")
+        print(f"      ├── rock/")
+        print(f"      ├── paper/")
+        print(f"      └── scissors/")
         return
     
     # Extract features
     X, y = extract_features_from_dataset()
     
     if len(X) == 0:
-        print("Error: No features extracted!")
+        print("\nError: No features extracted!")
+        print("Make sure your images contain visible hands.")
         return
     
     # Split and save
@@ -313,7 +422,16 @@ def main():
     print(f"="*70)
     print(f"Feature extraction completed successfully!")
     print(f"Total features per image: {X.shape[1]}")
-    print(f"Ready for training!")
+    print(f"Feature types:")
+    print(f"  - 63 hand landmark coordinates (x, y, z for 21 points)")
+    print(f"  - 15 relative distances between key points")
+    print(f"  - 5 finger angles")
+    print(f"\nThese features capture:")
+    print(f"  ✓ Hand pose and finger positions")
+    print(f"  ✓ Finger spread (important for scissors)")
+    print(f"  ✓ Fist closure (important for rock)")
+    print(f"  ✓ Open palm (important for paper)")
+    print(f"\nReady for training!")
     print(f"\nNext step: Run train.py")
     print(f"="*70)
 

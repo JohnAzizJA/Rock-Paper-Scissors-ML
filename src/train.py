@@ -12,7 +12,6 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import (accuracy_score, precision_score, recall_score,
                             f1_score, confusion_matrix, classification_report)
 import xgboost as xgb
@@ -32,7 +31,7 @@ CLASS_NAMES = ['rock', 'paper', 'scissors']
 def load_features():
     """Load extracted features"""
     print("="*70)
-    print("LOADING FEATURES")
+    print("LOADING HAND LANDMARK FEATURES")
     print("="*70)
     
     with open(os.path.join(FEATURES_DIR, 'train_features.pkl'), 'rb') as f:
@@ -49,80 +48,97 @@ def load_features():
     print(f"Training samples: {len(X_train)}")
     print(f"Testing samples: {len(X_test)}")
     print(f"Feature dimensions: {X_train.shape[1]}")
+    print(f"  - Hand landmarks (x,y,z): 63 features")
+    print(f"  - Relative distances: 15 features")
+    print(f"  - Finger angles: 5 features")
+    
+    # Check class distribution
+    print(f"\nClass distribution:")
+    for i, class_name in enumerate(CLASS_NAMES):
+        train_count = np.sum(y_train == i)
+        test_count = np.sum(y_test == i)
+        print(f"  {class_name}: {train_count} train, {test_count} test")
     
     return X_train, X_test, y_train, y_test
 
-def preprocess_features(X_train, X_test, y_train, use_feature_selection=True, k_features=50):
+def preprocess_features(X_train, X_test):
     """
-    Preprocess features: scaling and feature selection
+    Preprocess features: scaling only
+    Note: We keep all hand landmark features as they're all meaningful
     """
     print(f"\n" + "="*70)
     print(f"FEATURE PREPROCESSING")
     print(f"="*70)
     
-    # Standardize features
+    # Standardize features (important for distance-based classifiers)
     print("Applying StandardScaler...")
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    if use_feature_selection:
-        print(f"Selecting top {k_features} features using ANOVA F-test...")
-        selector = SelectKBest(f_classif, k=min(k_features, X_train_scaled.shape[1]))
-        X_train_selected = selector.fit_transform(X_train_scaled, y_train)
-        X_test_selected = selector.transform(X_test_scaled)
-        
-        print(f"Reduced from {X_train_scaled.shape[1]} to {X_train_selected.shape[1]} features")
-        
-        return X_train_selected, X_test_selected, scaler, selector
-    else:
-        return X_train_scaled, X_test_scaled, scaler, None
+    print(f"Features scaled to zero mean and unit variance")
+    print(f"Using all {X_train_scaled.shape[1]} hand landmark features")
+    
+    return X_train_scaled, X_test_scaled, scaler
 
 def get_classifiers():
-    """Define all classifiers"""
+    """Define all classifiers optimized for hand pose recognition"""
     classifiers = {
         'Decision Tree': DecisionTreeClassifier(
-            max_depth=10,
-            min_samples_split=5,
-            min_samples_leaf=2,
+            max_depth=15,
+            min_samples_split=3,
+            min_samples_leaf=1,
             random_state=42,
             class_weight='balanced'
         ),
         'Random Forest': RandomForestClassifier(
-            n_estimators=100,
-            max_depth=10,
-            min_samples_split=5,
+            n_estimators=200,
+            max_depth=20,
+            min_samples_split=3,
+            min_samples_leaf=1,
             random_state=42,
             n_jobs=-1,
             class_weight='balanced'
         ),
         'XGBoost': xgb.XGBClassifier(
-            n_estimators=100,
-            max_depth=6,
+            n_estimators=150,
+            max_depth=8,
             learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
             random_state=42,
             eval_metric='mlogloss'
         ),
         'KNN': KNeighborsClassifier(
-            n_neighbors=5,
+            n_neighbors=7,
             weights='distance',
+            metric='euclidean',
             n_jobs=-1
         ),
-        'SVM': SVC(
+        'SVM (RBF)': SVC(
             kernel='rbf',
-            C=1.0,
+            C=10.0,
             gamma='scale',
             random_state=42,
             probability=True,
             class_weight='balanced'
         ),
-        'ANN': MLPClassifier(
-            hidden_layer_sizes=(100, 50),
+        'SVM (Linear)': SVC(
+            kernel='linear',
+            C=1.0,
+            random_state=42,
+            probability=True,
+            class_weight='balanced'
+        ),
+        'Neural Network': MLPClassifier(
+            hidden_layer_sizes=(128, 64, 32),
             activation='relu',
             solver='adam',
-            max_iter=200,
+            learning_rate='adaptive',
+            max_iter=300,
             random_state=42,
-            early_stopping=True
+            early_stopping=True,
+            validation_fraction=0.1
         )
     }
     return classifiers
@@ -138,7 +154,7 @@ def plot_confusion_matrix(cm, class_names, classifier_name):
     plt.title(f'Confusion Matrix - {classifier_name}', fontsize=14, fontweight='bold')
     plt.tight_layout()
     
-    filename = f'cm_{classifier_name.lower().replace(" ", "_")}.png'
+    filename = f'cm_{classifier_name.lower().replace(" ", "_").replace("(", "").replace(")", "")}.png'
     plt.savefig(os.path.join(RESULTS_DIR, filename), dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -170,9 +186,9 @@ def train_and_evaluate(X_train, y_train, X_test, y_test):
         # Calculate metrics
         train_accuracy = accuracy_score(y_train, y_train_pred)
         test_accuracy = accuracy_score(y_test, y_test_pred)
-        test_precision = precision_score(y_test, y_test_pred, average='weighted')
-        test_recall = recall_score(y_test, y_test_pred, average='weighted')
-        test_f1 = f1_score(y_test, y_test_pred, average='weighted')
+        test_precision = precision_score(y_test, y_test_pred, average='weighted', zero_division=0)
+        test_recall = recall_score(y_test, y_test_pred, average='weighted', zero_division=0)
+        test_f1 = f1_score(y_test, y_test_pred, average='weighted', zero_division=0)
         
         # Store results
         results.append({
@@ -201,7 +217,15 @@ def train_and_evaluate(X_train, y_train, X_test, y_test):
         
         # Print classification report
         print(f"\nClassification Report:")
-        print(classification_report(y_test, y_test_pred, target_names=CLASS_NAMES))
+        print(classification_report(y_test, y_test_pred, target_names=CLASS_NAMES, zero_division=0))
+        
+        # Print per-class accuracy
+        print(f"\nPer-class Accuracy:")
+        for i, class_name in enumerate(CLASS_NAMES):
+            class_mask = y_test == i
+            if np.sum(class_mask) > 0:
+                class_acc = accuracy_score(y_test[class_mask], y_test_pred[class_mask])
+                print(f"  {class_name}: {class_acc*100:.2f}%")
     
     return results, trained_models
 
@@ -220,7 +244,7 @@ def save_results(results):
     print(f"\nResults saved to: {RESULTS_DIR}/results.csv")
     
     # Plot 1: Accuracy Comparison
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(14, 6))
     x = np.arange(len(results_df))
     width = 0.35
     
@@ -231,10 +255,20 @@ def save_results(results):
     
     plt.xlabel('Classifier', fontsize=12, fontweight='bold')
     plt.ylabel('Accuracy (%)', fontsize=12, fontweight='bold')
-    plt.title('Accuracy Comparison', fontsize=14, fontweight='bold')
+    plt.title('Accuracy Comparison - Hand Landmark Models', fontsize=14, fontweight='bold')
     plt.xticks(x, results_df['Classifier'], rotation=45, ha='right')
     plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3, axis='y')
+    plt.ylim(0, 105)
+    
+    # Add value labels on bars
+    for i, (train_acc, test_acc) in enumerate(zip(results_df['Train Accuracy (%)'], 
+                                                    results_df['Test Accuracy (%)'])):
+        plt.text(i - width/2, train_acc + 1, f'{train_acc:.1f}%', 
+                ha='center', va='bottom', fontsize=9)
+        plt.text(i + width/2, test_acc + 1, f'{test_acc:.1f}%', 
+                ha='center', va='bottom', fontsize=9)
+    
     plt.tight_layout()
     plt.savefig(os.path.join(RESULTS_DIR, 'accuracy_comparison.png'), dpi=300)
     plt.close()
@@ -250,7 +284,8 @@ def save_results(results):
     plt.grid(True, alpha=0.3, axis='x')
     
     for bar, time_val in zip(bars, results_df['Training Time (s)']):
-        plt.text(time_val + 0.01, bar.get_y() + bar.get_height()/2,
+        plt.text(time_val + max(results_df['Training Time (s)'])*0.02, 
+                bar.get_y() + bar.get_height()/2,
                 f'{time_val:.3f}s', va='center', fontweight='bold')
     
     plt.tight_layout()
@@ -259,7 +294,7 @@ def save_results(results):
     print(f"Saved: {RESULTS_DIR}/training_time.png")
     
     # Plot 3: Metrics Comparison
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(14, 6))
     x = np.arange(len(results_df))
     width = 0.25
     
@@ -278,6 +313,7 @@ def save_results(results):
     ax.set_xticklabels(results_df['Classifier'], rotation=45, ha='right')
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim(0, 1.1)
     plt.tight_layout()
     plt.savefig(os.path.join(RESULTS_DIR, 'metrics_comparison.png'), dpi=300)
     plt.close()
@@ -285,7 +321,7 @@ def save_results(results):
     
     return results_df
 
-def save_best_model(results_df, trained_models, scaler, selector):
+def save_best_model(results_df, trained_models, scaler):
     """Save the best performing model"""
     best_model_name = results_df.iloc[0]['Classifier']
     best_model = trained_models[best_model_name]
@@ -298,9 +334,11 @@ def save_best_model(results_df, trained_models, scaler, selector):
     
     model_data = {
         'model': best_model,
+        'model_name': best_model_name,
         'scaler': scaler,
-        'selector': selector,
-        'class_names': CLASS_NAMES
+        'class_names': CLASS_NAMES,
+        'feature_type': 'hand_landmarks',
+        'accuracy': best_accuracy
     }
     
     filename = os.path.join(MODELS_DIR, 'best_model.pkl')
@@ -308,6 +346,20 @@ def save_best_model(results_df, trained_models, scaler, selector):
         pickle.dump(model_data, f)
     
     print(f"\nBest model saved to: {filename}")
+    
+    # Also save all models
+    all_models_data = {
+        'models': trained_models,
+        'scaler': scaler,
+        'class_names': CLASS_NAMES,
+        'results': results_df
+    }
+    
+    filename_all = os.path.join(MODELS_DIR, 'all_models.pkl')
+    with open(filename_all, 'wb') as f:
+        pickle.dump(all_models_data, f)
+    
+    print(f"All models saved to: {filename_all}")
 
 def main():
     """Main function"""
@@ -320,10 +372,8 @@ def main():
     # Load features
     X_train, X_test, y_train, y_test = load_features()
     
-    # Preprocess features (NOW PASSING y_train)
-    X_train_proc, X_test_proc, scaler, selector = preprocess_features(
-        X_train, X_test, y_train, use_feature_selection=True, k_features=80
-    )
+    # Preprocess features (scaling only, no feature selection for hand landmarks)
+    X_train_proc, X_test_proc, scaler = preprocess_features(X_train, X_test)
     
     # Train and evaluate
     results, trained_models = train_and_evaluate(
@@ -334,16 +384,29 @@ def main():
     results_df = save_results(results)
     
     # Save best model
-    save_best_model(results_df, trained_models, scaler, selector)
+    save_best_model(results_df, trained_models, scaler)
     
     print(f"\n" + "="*70)
     print(f"TRAINING COMPLETED!")
     print(f"="*70)
-    print(f"Generated files:")
-    print(f"- Confusion matrices: {RESULTS_DIR}/cm_*.png")
-    print(f"- Comparison plots: {RESULTS_DIR}/")
-    print(f"- Results: {RESULTS_DIR}/results.csv")
-    print(f"- Best model: {MODELS_DIR}/best_model.pkl")
+    print(f"\nGenerated files:")
+    print(f"  Models:")
+    print(f"    - {MODELS_DIR}/best_model.pkl")
+    print(f"    - {MODELS_DIR}/all_models.pkl")
+    print(f"  Results:")
+    print(f"    - {RESULTS_DIR}/results.csv")
+    print(f"    - {RESULTS_DIR}/accuracy_comparison.png")
+    print(f"    - {RESULTS_DIR}/training_time.png")
+    print(f"    - {RESULTS_DIR}/metrics_comparison.png")
+    print(f"  Confusion Matrices:")
+    print(f"    - {RESULTS_DIR}/cm_*.png (one per classifier)")
+    
+    print(f"\n" + "="*70)
+    print(f"BEST MODEL DETAILS")
+    print(f"="*70)
+    print(f"Model: {results_df.iloc[0]['Classifier']}")
+    print(f"Test Accuracy: {results_df.iloc[0]['Test Accuracy (%)']}%")
+    print(f"F1-Score: {results_df.iloc[0]['F1-Score']}")
     print(f"\nNext step: Run predict.py to test on new images")
     print(f"="*70)
 

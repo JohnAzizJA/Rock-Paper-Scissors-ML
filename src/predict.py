@@ -3,181 +3,160 @@ import numpy as np
 from PIL import Image
 import pickle
 import matplotlib.pyplot as plt
+import cv2
+import warnings
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore')
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
+
+# Import MediaPipe
+try:
+    import mediapipe as mp
+    mp_hands = mp.solutions.hands
+    mp_drawing = mp.solutions.drawing_utils
+    hands = mp_hands.Hands(
+        static_image_mode=True,
+        max_num_hands=1,
+        min_detection_confidence=0.5
+    )
+    MEDIAPIPE_AVAILABLE = True
+except (ImportError, AttributeError) as e:
+    print(f"Error: MediaPipe not available - {e}")
+    MEDIAPIPE_AVAILABLE = False
+    hands = None
 
 # Paths
 MODELS_DIR = "models"
 
-def resize_image(image, target_size=(100, 100)):
-    """Resize image to target size"""
-    img_pil = Image.fromarray(image)
-    img_resized = img_pil.resize(target_size, Image.BILINEAR)
-    return np.array(img_resized)
-
-def extract_color_features(image):
-    """
-    Extract color-based features
-    - Mean, std, min, max for each RGB channel
-    - Color histograms
-    """
-    features = []
-    
-    # Separate RGB channels
-    r_channel = image[:, :, 0]
-    g_channel = image[:, :, 1]
-    b_channel = image[:, :, 2]
-    
-    # Statistical features for each channel
-    for channel in [r_channel, g_channel, b_channel]:
-        features.append(np.mean(channel))
-        features.append(np.std(channel))
-        features.append(np.min(channel))
-        features.append(np.max(channel))
-        features.append(np.median(channel))
-    
-    # Color histograms (16 bins per channel)
-    for channel in [r_channel, g_channel, b_channel]:
-        hist, _ = np.histogram(channel.flatten(), bins=16, range=(0, 256))
-        hist = hist / (hist.sum() + 1e-7)  # Normalize
-        features.extend(hist)
-    
-    return np.array(features)
-
-def extract_edge_features(image):
-    """
-    Extract simple edge features using gradients
-    """
-    features = []
-    
-    # Convert to grayscale
-    gray = np.mean(image, axis=2)
-    
-    # Compute horizontal and vertical gradients (simple difference)
-    grad_x = np.abs(np.diff(gray, axis=1))
-    grad_y = np.abs(np.diff(gray, axis=0))
-    
-    # Edge statistics
-    features.append(np.mean(grad_x))
-    features.append(np.std(grad_x))
-    features.append(np.max(grad_x))
-    
-    features.append(np.mean(grad_y))
-    features.append(np.std(grad_y))
-    features.append(np.max(grad_y))
-    
-    # Edge density (pixels with high gradient)
-    threshold = 30
-    edge_pixels_x = np.sum(grad_x > threshold)
-    edge_pixels_y = np.sum(grad_y > threshold)
-    features.append(edge_pixels_x / grad_x.size)
-    features.append(edge_pixels_y / grad_y.size)
-    
-    return np.array(features)
-
-def extract_texture_features(image):
-    """
-    Extract simple texture features
-    """
-    features = []
-    
-    # Convert to grayscale
-    gray = np.mean(image, axis=2)
-    
-    # Compute local variance (texture measure)
-    # Using 5x5 patches
-    h, w = gray.shape
-    patch_size = 5
-    variances = []
-    
-    for i in range(0, h - patch_size, patch_size):
-        for j in range(0, w - patch_size, patch_size):
-            patch = gray[i:i+patch_size, j:j+patch_size]
-            variances.append(np.var(patch))
-    
-    features.append(np.mean(variances))
-    features.append(np.std(variances))
-    features.append(np.max(variances))
-    features.append(np.min(variances))
-    
-    # Image entropy (measure of randomness)
-    hist, _ = np.histogram(gray.flatten(), bins=256, range=(0, 256))
-    hist = hist / (hist.sum() + 1e-7)
-    entropy = -np.sum(hist * np.log2(hist + 1e-7))
-    features.append(entropy)
-    
-    return np.array(features)
-
-def extract_shape_features(image):
-    """
-    Improved shape features:
-    - fill ratio
-    - number of connected components
-    - largest component aspect ratio
-    - edge density
-    """
-    from scipy import ndimage
-
-    features = []
-
-    gray = np.mean(image, axis=2)
-
-    # adaptive threshold
-    threshold = np.mean(gray)
-    binary = (gray > threshold).astype(np.uint8)
-
-    # --- 1) fill ratio ---
-    fill_ratio = np.sum(binary) / binary.size
-    features.append(fill_ratio)
-
-    # --- 2) connected components ---
-    labeled, num_components = ndimage.label(binary)
-    features.append(num_components / 10.0)  # normalize
-
-    # --- 3) largest component aspect ratio ---
-    if num_components > 0:
-        sizes = ndimage.sum(binary, labeled, range(1, num_components+1))
-        largest = np.argmax(sizes) + 1
-        coords = np.column_stack(np.where(labeled == largest))
-        y_min, x_min = coords.min(axis=0)
-        y_max, x_max = coords.max(axis=0)
-        h = max(1, y_max - y_min)
-        w = max(1, x_max - x_min)
-        aspect_ratio = w / h
+def extract_hand_landmarks(image):
+    """Extract 21 hand landmarks using MediaPipe"""
+    # Convert to RGB if needed
+    if len(image.shape) == 2:  # Grayscale
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    elif image.shape[2] == 4:  # RGBA
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
     else:
-        aspect_ratio = 1.0
+        image_rgb = image
+    
+    # Process the image
+    results = hands.process(image_rgb)
+    
+    if results.multi_hand_landmarks:
+        hand_landmarks = results.multi_hand_landmarks[0]
+        landmarks = []
+        for landmark in hand_landmarks.landmark:
+            landmarks.extend([landmark.x, landmark.y, landmark.z])
+        return np.array(landmarks), hand_landmarks
+    
+    return None, None
 
-    features.append(aspect_ratio)
-
-    # --- 4) edge density (strong separator scissors vs rock) ---
-    grad = np.hypot(np.diff(gray, axis=0, prepend=0), np.diff(gray, axis=1, prepend=0))
-    edge_density = np.sum(grad > 25) / grad.size
-    features.append(edge_density)
-
+def calculate_relative_distances(hand_landmarks):
+    """Calculate relative distances between key landmarks"""
+    if hand_landmarks is None:
+        return np.zeros(15)
+    
+    landmarks = hand_landmarks.landmark
+    
+    def get_coords(idx):
+        return np.array([landmarks[idx].x, landmarks[idx].y, landmarks[idx].z])
+    
+    def euclidean_distance(p1, p2):
+        return np.linalg.norm(p1 - p2)
+    
+    features = []
+    
+    # Key landmark indices
+    wrist = get_coords(0)
+    thumb_tip = get_coords(4)
+    index_tip = get_coords(8)
+    middle_tip = get_coords(12)
+    ring_tip = get_coords(16)
+    pinky_tip = get_coords(20)
+    
+    # Distance from each fingertip to wrist
+    features.append(euclidean_distance(thumb_tip, wrist))
+    features.append(euclidean_distance(index_tip, wrist))
+    features.append(euclidean_distance(middle_tip, wrist))
+    features.append(euclidean_distance(ring_tip, wrist))
+    features.append(euclidean_distance(pinky_tip, wrist))
+    
+    # Distance between fingertips
+    features.append(euclidean_distance(thumb_tip, index_tip))
+    features.append(euclidean_distance(index_tip, middle_tip))
+    features.append(euclidean_distance(middle_tip, ring_tip))
+    features.append(euclidean_distance(ring_tip, pinky_tip))
+    features.append(euclidean_distance(thumb_tip, pinky_tip))
+    
+    # Distance from fingertips to palm center
+    palm_center = (get_coords(0) + get_coords(5) + get_coords(9) + 
+                   get_coords(13) + get_coords(17)) / 5
+    
+    features.append(euclidean_distance(thumb_tip, palm_center))
+    features.append(euclidean_distance(index_tip, palm_center))
+    features.append(euclidean_distance(middle_tip, palm_center))
+    features.append(euclidean_distance(ring_tip, palm_center))
+    features.append(euclidean_distance(pinky_tip, palm_center))
+    
     return np.array(features)
+
+def calculate_finger_angles(hand_landmarks):
+    """Calculate angles of fingers"""
+    if hand_landmarks is None:
+        return np.zeros(5)
+    
+    landmarks = hand_landmarks.landmark
+    
+    def get_coords(idx):
+        return np.array([landmarks[idx].x, landmarks[idx].y, landmarks[idx].z])
+    
+    def calculate_angle(p1, p2, p3):
+        v1 = p1 - p2
+        v2 = p3 - p2
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-7)
+        angle = np.arccos(np.clip(cos_angle, -1.0, 1.0))
+        return angle
+    
+    angles = []
+    fingers = [
+        (1, 2, 4),   # Thumb
+        (5, 6, 8),   # Index
+        (9, 10, 12), # Middle
+        (13, 14, 16),# Ring
+        (17, 18, 20) # Pinky
+    ]
+    
+    for base, mid, tip in fingers:
+        angle = calculate_angle(get_coords(base), get_coords(mid), get_coords(tip))
+        angles.append(angle)
+    
+    return np.array(angles)
 
 def extract_all_features(image):
-    """Extract all features from an image - MUST match training"""
-    image_resized = resize_image(image, target_size=(100, 100))
+    """Extract all hand-based features from an image"""
+    landmarks_flat, hand_landmarks = extract_hand_landmarks(image)
     
-    color_feat = extract_color_features(image_resized)
-    edge_feat = extract_edge_features(image_resized)
-    texture_feat = extract_texture_features(image_resized)
-    shape_feat = extract_shape_features(image_resized)
+    if landmarks_flat is None:
+        return None, None
     
-    all_features = np.concatenate([color_feat, edge_feat, texture_feat, shape_feat])
+    distances = calculate_relative_distances(hand_landmarks)
+    angles = calculate_finger_angles(hand_landmarks)
     
-    return all_features
+    all_features = np.concatenate([landmarks_flat, distances, angles])
+    
+    return all_features, hand_landmarks
 
 def load_model():
     """Load the trained model"""
-    print("="*70)
-    print("LOADING TRAINED MODEL")
+    print("\n" + "="*70)
+    print("  🤖 LOADING MODEL...")
     print("="*70)
     
     model_path = os.path.join(MODELS_DIR, 'best_model.pkl')
     
     if not os.path.exists(model_path):
-        print(f"Error: Model not found at {model_path}")
-        print("Please run train.py first.")
+        print(f"❌ Error: Model not found at {model_path}")
+        print("   Please run train.py first.")
         return None
     
     with open(model_path, 'rb') as f:
@@ -185,15 +164,17 @@ def load_model():
     
     model = model_data['model']
     scaler = model_data['scaler']
-    selector = model_data['selector']
     class_names = model_data['class_names']
     
-    print(f"Model loaded: {type(model).__name__}")
-    print(f"Classes: {class_names}")
+    print(f"✅ Model loaded: {type(model).__name__}")
+    if 'accuracy' in model_data:
+        print(f"✅ Training accuracy: {model_data['accuracy']:.2f}%")
+    print(f"✅ Classes: {', '.join(class_names)}")
+    print("="*70)
     
-    return model, scaler, selector, class_names
+    return model, scaler, class_names
 
-def predict_image(image_path, model, scaler, selector, class_names):
+def predict_image(image_path, model, scaler, class_names):
     """Predict the class of a single image"""
     # Load image
     img = Image.open(image_path)
@@ -201,133 +182,195 @@ def predict_image(image_path, model, scaler, selector, class_names):
         img = img.convert('RGB')
     img_array = np.array(img)
     
-    # Extract features (MUST match training)
-    features = extract_all_features(img_array)
+    # Extract features
+    features, hand_landmarks = extract_all_features(img_array)
+    
+    if features is None:
+        return None, None, None, img_array
+    
     features = features.reshape(1, -1)
     
     # Scale features
     features_scaled = scaler.transform(features)
     
-    # Apply feature selection if it was used
-    if selector is not None:
-        features_final = selector.transform(features_scaled)
-    else:
-        features_final = features_scaled
-    
     # Predict
-    prediction = model.predict(features_final)[0]
+    prediction = model.predict(features_scaled)[0]
     predicted_class = class_names[prediction]
     
     # Get probabilities if available
     if hasattr(model, 'predict_proba'):
-        probabilities = model.predict_proba(features_final)[0]
+        probabilities = model.predict_proba(features_scaled)[0]
     else:
         probabilities = None
     
-    return predicted_class, probabilities, img
+    return predicted_class, probabilities, hand_landmarks, img_array
 
-def visualize_prediction(image, predicted_class, probabilities, class_names):
-    """Visualize prediction result"""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+def visualize_prediction(image, predicted_class, probabilities, hand_landmarks, class_names):
+    """Visualize prediction result with hand landmarks"""
+    fig = plt.figure(figsize=(15, 5))
     
-    # Display image
-    ax1.imshow(image)
-    ax1.set_title(f'Predicted: {predicted_class.upper()}',
-                  fontsize=16, fontweight='bold', color='green')
+    # Image with hand landmarks
+    ax1 = plt.subplot(1, 3, 1)
+    if hand_landmarks is not None:
+        # Draw landmarks on image
+        image_with_landmarks = image.copy()
+        h, w = image.shape[:2]
+        
+        # Draw connections
+        connections = mp_hands.HAND_CONNECTIONS
+        for connection in connections:
+            start_idx = connection[0]
+            end_idx = connection[1]
+            start_point = hand_landmarks.landmark[start_idx]
+            end_point = hand_landmarks.landmark[end_idx]
+            
+            start_x, start_y = int(start_point.x * w), int(start_point.y * h)
+            end_x, end_y = int(end_point.x * w), int(end_point.y * h)
+            
+            cv2.line(image_with_landmarks, (start_x, start_y), (end_x, end_y), (0, 255, 0), 2)
+        
+        # Draw landmarks
+        for landmark in hand_landmarks.landmark:
+            x, y = int(landmark.x * w), int(landmark.y * h)
+            cv2.circle(image_with_landmarks, (x, y), 5, (255, 0, 0), -1)
+        
+        ax1.imshow(image_with_landmarks)
+    else:
+        ax1.imshow(image)
+    
+    ax1.set_title('Hand Landmarks Detected', fontsize=14, fontweight='bold')
     ax1.axis('off')
     
-    # Display probabilities
+    # Original image
+    ax2 = plt.subplot(1, 3, 2)
+    ax2.imshow(image)
+    ax2.set_title(f'Predicted: {predicted_class.upper()}',
+                  fontsize=16, fontweight='bold', color='green')
+    ax2.axis('off')
+    
+    # Probabilities
+    ax3 = plt.subplot(1, 3, 3)
     if probabilities is not None:
         colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
-        bars = ax2.barh(class_names, probabilities * 100, color=colors)
-        ax2.set_xlabel('Probability (%)', fontsize=12, fontweight='bold')
-        ax2.set_title('Class Probabilities', fontsize=14, fontweight='bold')
-        ax2.set_xlim([0, 100])
+        bars = ax3.barh(class_names, probabilities * 100, color=colors)
+        ax3.set_xlabel('Probability (%)', fontsize=12, fontweight='bold')
+        ax3.set_title('Class Probabilities', fontsize=14, fontweight='bold')
+        ax3.set_xlim([0, 100])
         
         for bar, prob in zip(bars, probabilities):
             width = bar.get_width()
-            ax2.text(width + 2, bar.get_y() + bar.get_height()/2,
+            ax3.text(width + 2, bar.get_y() + bar.get_height()/2,
                     f'{prob*100:.1f}%', va='center', fontweight='bold')
     else:
-        ax2.text(0.5, 0.5, f'Predicted:\n{predicted_class.upper()}',
+        ax3.text(0.5, 0.5, f'Predicted:\n{predicted_class.upper()}',
                 ha='center', va='center', fontsize=18, fontweight='bold')
-        ax2.axis('off')
+        ax3.axis('off')
     
     plt.tight_layout()
     plt.show()
 
-def test_on_folder(folder_path, model, scaler, selector, class_names):
+def test_on_folder(folder_path, model, scaler, class_names):
     """Test on all images in a folder"""
-    print(f"\n{'='*70}")
-    print(f"TESTING ON FOLDER: {folder_path}")
-    print(f"{'='*70}")
+    print("\n" + "="*70)
+    print(f"  📂 TESTING FOLDER: {os.path.basename(folder_path)}")
+    print("="*70)
     
     valid_extensions = ('.png', '.jpg', '.jpeg', '.bmp')
-    image_files = [f for f in os.listdir(folder_path)
-                   if f.lower().endswith(valid_extensions)]
+    image_files = sorted([f for f in os.listdir(folder_path)
+                         if f.lower().endswith(valid_extensions)])
     
     if not image_files:
-        print("No images found in folder!")
+        print("❌ No images found in folder!")
         return
     
-    print(f"Found {len(image_files)} images\n")
+    print(f"📊 Found {len(image_files)} images\n")
     
-    results = []
     correct = 0
     total = 0
+    no_hand_detected = 0
+    predictions_by_class = {'rock': [], 'paper': [], 'scissors': []}
     
-    for img_file in image_files:
+    # Progress tracking
+    for idx, img_file in enumerate(image_files, 1):
         img_path = os.path.join(folder_path, img_file)
         
         try:
-            predicted_class, probabilities, _ = predict_image(
-                img_path, model, scaler, selector, class_names
+            predicted_class, probabilities, hand_landmarks, _ = predict_image(
+                img_path, model, scaler, class_names
             )
             
-            # Try to extract true class from filename
+            if predicted_class is None:
+                print(f"[{idx}/{len(image_files)}] ⚠️  {img_file}: No hand detected")
+                no_hand_detected += 1
+                continue
+            
+            # Extract true class from filename
             true_class = None
             for cls in class_names:
                 if cls in img_file.lower():
                     true_class = cls
                     break
             
-            if probabilities is not None:
-                confidence = probabilities[class_names.index(predicted_class)] * 100
-                result_str = f"{img_file}: {predicted_class} ({confidence:.1f}%)"
-            else:
-                result_str = f"{img_file}: {predicted_class}"
+            # Build result string
+            confidence = probabilities[class_names.index(predicted_class)] * 100
+            
+            # Emoji for each class
+            emojis = {'rock': '✊', 'paper': '✋', 'scissors': '✌️'}
+            pred_emoji = emojis.get(predicted_class, '👋')
+            
+            is_correct = (true_class == predicted_class) if true_class else None
             
             if true_class:
-                result_str += f" [True: {true_class}]"
-                if true_class == predicted_class:
-                    result_str += " ✓"
+                if is_correct:
+                    status = "✅"
                     correct += 1
                 else:
-                    result_str += " ✗"
+                    status = "❌"
+                    true_emoji = emojis.get(true_class, '👋')
                 total += 1
+                
+                result_str = f"[{idx}/{len(image_files)}] {status} {img_file[:30]:30} → {pred_emoji} {predicted_class.upper():8} ({confidence:5.1f}%) [True: {true_class}]"
+            else:
+                result_str = f"[{idx}/{len(image_files)}] {pred_emoji} {img_file[:30]:30} → {predicted_class.upper():8} ({confidence:5.1f}%)"
             
             print(result_str)
-            results.append({
-                'file': img_file,
-                'predicted': predicted_class,
-                'true': true_class,
-                'correct': true_class == predicted_class if true_class else None
-            })
+            predictions_by_class[predicted_class].append(img_file)
             
         except Exception as e:
-            print(f"Error processing {img_file}: {e}")
+            print(f"[{idx}/{len(image_files)}] ❌ {img_file}: Error - {str(e)[:50]}")
+    
+    # Summary
+    print("\n" + "="*70)
+    print("  📊 RESULTS SUMMARY")
+    print("="*70)
     
     if total > 0:
         accuracy = (correct / total) * 100
-        print(f"\n{'='*70}")
-        print(f"ACCURACY: {accuracy:.2f}% ({correct}/{total})")
-        print(f"{'='*70}")
+        print(f"✅ Accuracy: {accuracy:.1f}% ({correct}/{total} correct)")
+    
+    if no_hand_detected > 0:
+        print(f"⚠️  No hand detected: {no_hand_detected} images")
+    
+    # Predictions breakdown
+    print(f"\n📈 Predictions by class:")
+    for cls in class_names:
+        count = len(predictions_by_class[cls])
+        emojis = {'rock': '✊', 'paper': '✋', 'scissors': '✌️'}
+        emoji = emojis.get(cls, '👋')
+        print(f"   {emoji} {cls.capitalize():8}: {count} images")
+    
+    print("="*70)
 
 def main():
     """Main function"""
-    print("="*70)
-    print("ROCK-PAPER-SCISSORS PREDICTION")
-    print("PURE MACHINE LEARNING APPROACH")
+    if not MEDIAPIPE_AVAILABLE:
+        print("\n❌ ERROR: MediaPipe is required for prediction!")
+        print("   Install it with: pip install mediapipe")
+        return
+    
+    print("\n" + "="*70)
+    print("  ✊✋✌️  ROCK-PAPER-SCISSORS CLASSIFIER")
+    print("  🤖 Hand Landmark Detection with Machine Learning")
     print("="*70)
     
     # Load model
@@ -335,60 +378,80 @@ def main():
     if model_data is None:
         return
     
-    model, scaler, selector, class_names = model_data
+    model, scaler, class_names = model_data
     
     # Prediction options
-    print(f"\n{'='*70}")
-    print("PREDICTION OPTIONS")
+    print("\n" + "="*70)
+    print("  🎯 PREDICTION OPTIONS")
     print("="*70)
-    print("1. Predict single image")
-    print("2. Test on folder")
+    print("  1️⃣  Predict single image (with visualization)")
+    print("  2️⃣  Test on folder (batch processing)")
+    print("="*70)
     
-    choice = input("\nSelect option (1/2): ").strip()
+    choice = input("\n👉 Select option (1/2): ").strip()
     
     if choice == '1':
         # Single image prediction
-        image_path = input("Enter image path: ").strip()
+        image_path = input("📁 Enter image path: ").strip().strip('"')
         
         if not os.path.exists(image_path):
-            print(f"Error: Image not found at {image_path}")
+            print(f"❌ Error: Image not found at {image_path}")
             return
         
         try:
-            predicted_class, probabilities, img = predict_image(
-                image_path, model, scaler, selector, class_names
+            print("\n🔍 Analyzing image...")
+            predicted_class, probabilities, hand_landmarks, img = predict_image(
+                image_path, model, scaler, class_names
             )
             
-            print(f"\n{'='*70}")
-            print(f"PREDICTION RESULT")
-            print(f"{'='*70}")
-            print(f"Predicted class: {predicted_class.upper()}")
+            if predicted_class is None:
+                print("\n" + "="*70)
+                print("❌ ERROR: No hand detected in the image!")
+                print("   Make sure the image contains a clear hand gesture.")
+                print("="*70)
+                return
+            
+            # Emoji mapping
+            emojis = {'rock': '✊', 'paper': '✋', 'scissors': '✌️'}
+            emoji = emojis.get(predicted_class, '👋')
+            
+            print("\n" + "="*70)
+            print("  🎯 PREDICTION RESULT")
+            print("="*70)
+            print(f"  {emoji} Predicted: {predicted_class.upper()}")
             
             if probabilities is not None:
-                print("\nProbabilities:")
+                print(f"\n  📊 Confidence Scores:")
                 for cls, prob in zip(class_names, probabilities):
-                    print(f"  {cls}: {prob*100:.2f}%")
-            print(f"{'='*70}")
+                    cls_emoji = emojis.get(cls, '👋')
+                    bar_length = int(prob * 30)
+                    bar = '█' * bar_length + '░' * (30 - bar_length)
+                    print(f"     {cls_emoji} {cls.capitalize():8} {bar} {prob*100:5.1f}%")
+            print("="*70)
             
+            print("\n📊 Opening visualization...")
             # Visualize
-            visualize_prediction(img, predicted_class, probabilities, class_names)
+            visualize_prediction(img, predicted_class, probabilities, hand_landmarks, class_names)
             
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"❌ Error: {e}")
     
     elif choice == '2':
         # Test on folder
-        folder_path = input("Enter folder path: ").strip()
+        folder_path = input("📁 Enter folder path: ").strip().strip('"')
         
         if not os.path.exists(folder_path):
-            print(f"Error: Folder not found at {folder_path}")
+            print(f"❌ Error: Folder not found at {folder_path}")
             return
         
-        test_on_folder(folder_path, model, scaler, selector, class_names)
+        test_on_folder(folder_path, model, scaler, class_names)
     
-    print(f"\n{'='*70}")
-    print("PREDICTION COMPLETED!")
-    print("="*70)
+    else:
+        print("❌ Invalid option! Please select 1 or 2.")
+    
+    print("\n" + "="*70)
+    print("  ✅ PREDICTION COMPLETED!")
+    print("="*70 + "\n")
 
 if __name__ == "__main__":
     main()
