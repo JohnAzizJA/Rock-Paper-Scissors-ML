@@ -352,7 +352,7 @@ def test_on_folder(folder_path, model, scaler, class_names):
         print(f"⚠️  No hand detected: {no_hand_detected} images")
     
     # Predictions breakdown
-    print(f"\n📈 Predictions by class:")
+    print("\n📈 Predictions by class:")
     for cls in class_names:
         count = len(predictions_by_class[cls])
         emojis = {'rock': '✊', 'paper': '✋', 'scissors': '✌️'}
@@ -421,7 +421,7 @@ def main():
             print(f"  {emoji} Predicted: {predicted_class.upper()}")
             
             if probabilities is not None:
-                print(f"\n  📊 Confidence Scores:")
+                print("\n  📊 Confidence Scores:")
                 for cls, prob in zip(class_names, probabilities):
                     cls_emoji = emojis.get(cls, '👋')
                     bar_length = int(prob * 30)

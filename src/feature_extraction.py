@@ -298,7 +298,7 @@ def extract_features_from_dataset():
         print(f"  Successfully processed: {processed}/{len(images)} images")
     
     if len(X) == 0:
-        print(f"\n" + "="*70)
+        print("\n" + "="*70)
         print("ERROR: No features extracted!")
         print("="*70)
         return np.array([]), np.array([])
@@ -306,24 +306,24 @@ def extract_features_from_dataset():
     X = np.array(X)
     y = np.array(y)
     
-    print(f"\n" + "="*70)
-    print(f"FEATURE EXTRACTION COMPLETED")
-    print(f"="*70)
+    print("\n" + "="*70)
+    print("FEATURE EXTRACTION COMPLETED")
+    print("="*70)
     print(f"Total samples: {len(X)}")
     print(f"Feature dimensions: {X.shape[1]}")
     print(f"Classes: {np.unique(y)}")
     print(f"Failed to detect hands: {len(failed_images)}")
     
     if failed_images and len(failed_images) < 20:
-        print(f"\nFailed images:")
+        print("\nFailed images:")
         for class_name, filename in failed_images[:10]:
             print(f"  {class_name}/{filename}")
     
     # Feature breakdown
-    print(f"\nFeature composition:")
-    print(f"  Hand landmarks (21 × 3): 63 features (x, y, z coordinates)")
-    print(f"  Relative distances: 15 features (fingertip distances)")
-    print(f"  Finger angles: 5 features (finger bend angles)")
+    print("\nFeature composition:")
+    print("  Hand landmarks (21 × 3): 63 features (x, y, z coordinates)")
+    print("  Relative distances: 15 features (fingertip distances)")
+    print("  Finger angles: 5 features (finger bend angles)")
     print(f"  Total: {X.shape[1]} features")
     
     return X, y
@@ -332,9 +332,9 @@ def split_and_save_data(X, y, test_size=0.2, random_state=42):
     """
     Split data into train and test sets and save
     """
-    print(f"\n" + "="*70)
-    print(f"SPLITTING DATASET")
-    print(f"="*70)
+    print("\n" + "="*70)
+    print("SPLITTING DATASET")
+    print("="*70)
     
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=random_state, stratify=y
@@ -367,8 +367,8 @@ def split_and_save_data(X, y, test_size=0.2, random_state=42):
         pickle.dump(test_data, f)
     
     print(f"\nFeatures saved to: {FEATURES_DIR}/")
-    print(f"  - train_features.pkl")
-    print(f"  - test_features.pkl")
+    print("  - train_features.pkl")
+    print("  - test_features.pkl")
     
     return X_train, X_test, y_train, y_test
 
@@ -392,17 +392,17 @@ def main():
     
     # Check if data exists
     if not os.path.exists(DATA_DIR):
-        print(f"\nError: Data directory '{DATA_DIR}' not found!")
-        print(f"Expected structure:")
-        print(f"  data/")
-        print(f"  ├── training/")
-        print(f"  │   ├── rock/")
-        print(f"  │   ├── paper/")
-        print(f"  │   └── scissors/")
-        print(f"  └── testing/")
-        print(f"      ├── rock/")
-        print(f"      ├── paper/")
-        print(f"      └── scissors/")
+        print("\nError: Data directory '{DATA_DIR}' not found!")
+        print("Expected structure:")
+        print("  data/")
+        print("  ├── training/")
+        print("  │   ├── rock/")
+        print("  │   ├── paper/")
+        print("  │   └── scissors/")
+        print("  └── testing/")
+        print("      ├── rock/")
+        print("      ├── paper/")
+        print("      └── scissors/")
         return
     
     # Extract features
@@ -417,23 +417,23 @@ def main():
     X_train, X_test, y_train, y_test = split_and_save_data(X, y)
     
     # Summary
-    print(f"\n" + "="*70)
-    print(f"SUMMARY")
-    print(f"="*70)
-    print(f"Feature extraction completed successfully!")
+    print("\n" + "="*70)
+    print("SUMMARY")
+    print("="*70)
+    print("Feature extraction completed successfully!")
     print(f"Total features per image: {X.shape[1]}")
-    print(f"Feature types:")
-    print(f"  - 63 hand landmark coordinates (x, y, z for 21 points)")
-    print(f"  - 15 relative distances between key points")
-    print(f"  - 5 finger angles")
-    print(f"\nThese features capture:")
-    print(f"  ✓ Hand pose and finger positions")
-    print(f"  ✓ Finger spread (important for scissors)")
-    print(f"  ✓ Fist closure (important for rock)")
-    print(f"  ✓ Open palm (important for paper)")
-    print(f"\nReady for training!")
-    print(f"\nNext step: Run train.py")
-    print(f"="*70)
+    print("Feature types:")
+    print("  - 63 hand landmark coordinates (x, y, z for 21 points)")
+    print("  - 15 relative distances between key points")
+    print("  - 5 finger angles")
+    print("\nThese features capture:")
+    print("  ✓ Hand pose and finger positions")
+    print("  ✓ Finger spread (important for scissors)")
+    print("  ✓ Fist closure (important for rock)")
+    print("  ✓ Open palm (important for paper)")
+    print("\nReady for training!")
+    print("\nNext step: Run train.py")
+    print("="*70)
 
 if __name__ == "__main__":
     main()

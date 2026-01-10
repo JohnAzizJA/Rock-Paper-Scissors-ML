@@ -48,12 +48,12 @@ def load_features():
     print(f"Training samples: {len(X_train)}")
     print(f"Testing samples: {len(X_test)}")
     print(f"Feature dimensions: {X_train.shape[1]}")
-    print(f"  - Hand landmarks (x,y,z): 63 features")
-    print(f"  - Relative distances: 15 features")
-    print(f"  - Finger angles: 5 features")
+    print("  - Hand landmarks (x,y,z): 63 features")
+    print("  - Relative distances: 15 features")
+    print("  - Finger angles: 5 features")
     
     # Check class distribution
-    print(f"\nClass distribution:")
+    print("\nClass distribution:")
     for i, class_name in enumerate(CLASS_NAMES):
         train_count = np.sum(y_train == i)
         test_count = np.sum(y_test == i)
@@ -66,9 +66,9 @@ def preprocess_features(X_train, X_test):
     Preprocess features: scaling only
     Note: We keep all hand landmark features as they're all meaningful
     """
-    print(f"\n" + "="*70)
-    print(f"FEATURE PREPROCESSING")
-    print(f"="*70)
+    print("\n" + "="*70)
+    print("FEATURE PREPROCESSING")
+    print("="*70)
     
     # Standardize features (important for distance-based classifiers)
     print("Applying StandardScaler...")
@@ -76,8 +76,8 @@ def preprocess_features(X_train, X_test):
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    print(f"Features scaled to zero mean and unit variance")
-    print(f"Using all {X_train_scaled.shape[1]} hand landmark features")
+    print("Features scaled to zero mean and unit variance")
+    print("Using all {X_train_scaled.shape[1]} hand landmark features")
     
     return X_train_scaled, X_test_scaled, scaler
 
@@ -162,9 +162,9 @@ def train_and_evaluate(X_train, y_train, X_test, y_test):
     """Train all classifiers and evaluate"""
     classifiers = get_classifiers()
     
-    print(f"\n" + "="*70)
-    print(f"TRAINING AND EVALUATION")
-    print(f"="*70)
+    print("\n" + "="*70)
+    print("TRAINING AND EVALUATION")
+    print("="*70)
     
     results = []
     trained_models = {}
@@ -216,11 +216,11 @@ def train_and_evaluate(X_train, y_train, X_test, y_test):
         plot_confusion_matrix(cm, CLASS_NAMES, name)
         
         # Print classification report
-        print(f"\nClassification Report:")
+        print("\nClassification Report:")
         print(classification_report(y_test, y_test_pred, target_names=CLASS_NAMES, zero_division=0))
         
         # Print per-class accuracy
-        print(f"\nPer-class Accuracy:")
+        print("\nPer-class Accuracy:")
         for i, class_name in enumerate(CLASS_NAMES):
             class_mask = y_test == i
             if np.sum(class_mask) > 0:
@@ -234,9 +234,9 @@ def save_results(results):
     results_df = pd.DataFrame(results)
     results_df = results_df.sort_values('Test Accuracy (%)', ascending=False)
     
-    print(f"\n" + "="*70)
-    print(f"RESULTS SUMMARY")
-    print(f"="*70)
+    print("\n" + "="*70)
+    print("RESULTS SUMMARY")
+    print("="*70)
     print("\n" + results_df.to_string(index=False))
     
     # Save to CSV
@@ -386,29 +386,29 @@ def main():
     # Save best model
     save_best_model(results_df, trained_models, scaler)
     
-    print(f"\n" + "="*70)
-    print(f"TRAINING COMPLETED!")
-    print(f"="*70)
-    print(f"\nGenerated files:")
-    print(f"  Models:")
+    print("\n" + "="*70)
+    print("TRAINING COMPLETED!")
+    print("="*70)
+    print("\nGenerated files:")
+    print("  Models:")
     print(f"    - {MODELS_DIR}/best_model.pkl")
     print(f"    - {MODELS_DIR}/all_models.pkl")
-    print(f"  Results:")
+    print("  Results:")
     print(f"    - {RESULTS_DIR}/results.csv")
     print(f"    - {RESULTS_DIR}/accuracy_comparison.png")
     print(f"    - {RESULTS_DIR}/training_time.png")
     print(f"    - {RESULTS_DIR}/metrics_comparison.png")
-    print(f"  Confusion Matrices:")
+    print("  Confusion Matrices:")
     print(f"    - {RESULTS_DIR}/cm_*.png (one per classifier)")
     
-    print(f"\n" + "="*70)
-    print(f"BEST MODEL DETAILS")
-    print(f"="*70)
+    print("\n" + "="*70)
+    print("BEST MODEL DETAILS")
+    print("="*70)
     print(f"Model: {results_df.iloc[0]['Classifier']}")
     print(f"Test Accuracy: {results_df.iloc[0]['Test Accuracy (%)']}%")
     print(f"F1-Score: {results_df.iloc[0]['F1-Score']}")
-    print(f"\nNext step: Run predict.py to test on new images")
-    print(f"="*70)
+    print("\nNext step: Run predict.py to test on new images")
+    print("="*70)
 
 if __name__ == "__main__":
     main()
