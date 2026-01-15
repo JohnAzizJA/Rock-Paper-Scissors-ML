@@ -1,8 +1,0 @@
-Classifier,Training Time (s),Train Accuracy (%),Test Accuracy (%),Precision,Recall,F1-Score
-Decision Tree,0.026,100.0,100.0,1.0,1.0,1.0
-Random Forest,0.435,100.0,100.0,1.0,1.0,1.0
-XGBoost,0.555,100.0,100.0,1.0,1.0,1.0
-KNN,0.001,100.0,100.0,1.0,1.0,1.0
-SVM (RBF),0.054,100.0,100.0,1.0,1.0,1.0
-SVM (Linear),0.02,100.0,100.0,1.0,1.0,1.0
-Neural Network,0.197,99.22,98.96,0.9899,0.9896,0.9896
